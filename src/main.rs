@@ -1,10 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use hyper::{Body, Method, Request, Response, StatusCode};
-use log::{info, LevelFilter};
-use simplelog::{Config, SimpleLogger};
+use log::info;
 use std::future::Future;
-use std::net::SocketAddr;
 use std::path::{Component, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -15,7 +13,7 @@ use std::task::{Context, Poll};
 struct Args {
     /// Bind to this address:port.
     #[clap(short, long, value_name = "ADDRESS:PORT", default_value = "[::1]:0")]
-    bind: SocketAddr,
+    bind: std::net::SocketAddr,
 
     /// Set the path of the document root.
     #[clap(short = 'r', long, value_name = "PATH", default_value = ".")]
@@ -24,7 +22,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    SimpleLogger::init(LevelFilter::Info, Config::default())?;
+    simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default())?;
 
     let args = Args::parse();
 
