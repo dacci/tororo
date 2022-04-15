@@ -9,8 +9,6 @@ use std::path::{Component, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::fs::File;
-use tokio_util::codec::{BytesCodec, FramedRead};
 
 #[derive(Debug, Parser)]
 #[clap(about, version)]
@@ -74,12 +72,11 @@ impl Service {
         Self { args }
     }
 
-    fn resolve<T>(&self, req: &Request<T>) -> PathBuf {
-        let uri = PathBuf::from(req.uri().path());
+    fn resolve(&self, uri: &str) -> PathBuf {
+        let uri = PathBuf::from(uri);
         let mut normalized = PathBuf::new();
         for component in uri.components() {
             match component {
-                Component::CurDir => {}
                 Component::ParentDir => {
                     normalized.pop();
                 }
@@ -102,23 +99,24 @@ impl hyper::service::Service<Request<Body>> for Service {
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let path = self.resolve(&req);
+        use tokio::fs::File;
+        use tokio_util::codec::{BytesCodec, FramedRead};
+
+        let path = self.resolve(req.uri().path());
         let fut = async move {
-            if req.method() != Method::GET {
-                Response::builder()
-                    .status(StatusCode::METHOD_NOT_ALLOWED)
-                    .body(Body::empty())
+            let res = if req.method() != Method::GET {
+                Err(StatusCode::METHOD_NOT_ALLOWED)
             } else if path.is_dir() {
-                Response::builder()
-                    .status(StatusCode::FORBIDDEN)
-                    .body(Body::empty())
+                Err(StatusCode::FORBIDDEN)
             } else if let Ok(file) = File::open(path).await {
-                Response::builder()
-                    .body(Body::wrap_stream(FramedRead::new(file, BytesCodec::new())))
+                Ok(Body::wrap_stream(FramedRead::new(file, BytesCodec::new())))
             } else {
-                Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::empty())
+                Err(StatusCode::NOT_FOUND)
+            };
+
+            match res {
+                Ok(body) => Response::builder().body(body),
+                Err(status) => Response::builder().status(status).body(Body::empty()),
             }
         };
 
