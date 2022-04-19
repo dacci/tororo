@@ -1,12 +1,10 @@
-use anyhow::Result;
 use clap::Parser;
-use hyper::{Body, Method, Request, Response, StatusCode};
+use hyper::http::{Error as HttpError, Method, Request, Response, StatusCode};
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Error, Server};
 use log::info;
-use std::future::Future;
-use std::path::{Component, PathBuf};
-use std::pin::Pin;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 #[derive(Debug, Parser)]
 #[clap(about, version)]
@@ -21,12 +19,20 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default())?;
+async fn main() -> Result<(), Error> {
+    use simplelog::{Config, SimpleLogger};
 
-    let args = Args::parse();
+    SimpleLogger::init(log::LevelFilter::Info, Config::default())
+        .expect("failed to initialize logging");
 
-    let server = hyper::Server::try_bind(&args.bind)?.serve(Server::new(args));
+    let args = Arc::new(Args::parse());
+
+    let service = make_service_fn(|_| {
+        let args = Arc::clone(&args);
+        async { Ok::<_, Error>(service_fn(move |req| handle(Arc::clone(&args), req))) }
+    });
+
+    let server = Server::try_bind(&args.bind)?.serve(service);
     info!("Server started on {}", server.local_addr());
 
     server.await?;
@@ -34,90 +40,42 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-struct Server {
-    args: Arc<Args>,
+async fn handle(args: Arc<Args>, req: Request<Body>) -> Result<Response<Body>, HttpError> {
+    use tokio::fs::File;
+    use tokio_util::codec::{BytesCodec, FramedRead};
+
+    let path = args.document_root.join(normalize(req.uri().path()));
+
+    let res = if req.method() != Method::GET {
+        Err(StatusCode::METHOD_NOT_ALLOWED)
+    } else if path.is_dir() {
+        Err(StatusCode::FORBIDDEN)
+    } else if let Ok(file) = File::open(path).await {
+        Ok(Body::wrap_stream(FramedRead::new(file, BytesCodec::new())))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    };
+
+    match res {
+        Ok(body) => Response::builder().body(body),
+        Err(status) => Response::builder().status(status).body(Body::empty()),
+    }
 }
 
-impl Server {
-    fn new(args: Args) -> Self {
-        Self {
-            args: Arc::new(args),
+fn normalize(uri: &str) -> PathBuf {
+    use std::path::Component;
+
+    let uri = PathBuf::from(uri);
+    let mut normalized = PathBuf::new();
+    for component in uri.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(component) => normalized.push(component),
+            _ => {}
         }
     }
-}
 
-impl<T> hyper::service::Service<T> for Server {
-    type Response = Service;
-    type Error = hyper::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, _: T) -> Self::Future {
-        let svc = Service::new(Arc::clone(&self.args));
-        Box::pin(async move { Ok(svc) })
-    }
-}
-
-struct Service {
-    args: Arc<Args>,
-}
-
-impl Service {
-    fn new(args: Arc<Args>) -> Self {
-        Self { args }
-    }
-
-    fn resolve(&self, uri: &str) -> PathBuf {
-        let uri = PathBuf::from(uri);
-        let mut normalized = PathBuf::new();
-        for component in uri.components() {
-            match component {
-                Component::ParentDir => {
-                    normalized.pop();
-                }
-                Component::Normal(component) => normalized.push(component),
-                _ => {}
-            }
-        }
-
-        self.args.document_root.join(normalized)
-    }
-}
-
-impl hyper::service::Service<Request<Body>> for Service {
-    type Response = Response<Body>;
-    type Error = hyper::http::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
-        use tokio::fs::File;
-        use tokio_util::codec::{BytesCodec, FramedRead};
-
-        let path = self.resolve(req.uri().path());
-        let fut = async move {
-            let res = if req.method() != Method::GET {
-                Err(StatusCode::METHOD_NOT_ALLOWED)
-            } else if path.is_dir() {
-                Err(StatusCode::FORBIDDEN)
-            } else if let Ok(file) = File::open(path).await {
-                Ok(Body::wrap_stream(FramedRead::new(file, BytesCodec::new())))
-            } else {
-                Err(StatusCode::NOT_FOUND)
-            };
-
-            match res {
-                Ok(body) => Response::builder().body(body),
-                Err(status) => Response::builder().status(status).body(Body::empty()),
-            }
-        };
-
-        Box::pin(fut)
-    }
+    normalized
 }

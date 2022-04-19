@@ -7,7 +7,6 @@ description = "Trivial HTTP server"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.52"
 clap = { version = "3.0.4", features = ["derive"] }
 hyper = { version = "0.14.16", features = ["http1", "server", "stream", "tcp"] }
 log = "0.4.14"
