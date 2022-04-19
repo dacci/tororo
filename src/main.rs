@@ -19,7 +19,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use simplelog::{Config, SimpleLogger};
 
     SimpleLogger::init(log::LevelFilter::Info, Config::default())
@@ -35,9 +35,32 @@ async fn main() -> Result<(), Error> {
     let server = Server::try_bind(&args.bind)?.serve(service);
     info!("Server started on {}", server.local_addr());
 
-    server.await?;
+    tokio::select! {
+        r = server => r?,
+        r = handle_signal() => r?,
+    }
 
     Ok(())
+}
+
+#[cfg(unix)]
+async fn handle_signal() -> Result<(), std::io::Error> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+
+    tokio::select! {
+        _ = interrupt.recv() => (),
+        _ = terminate.recv() => (),
+    };
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn handle_signal() -> Result<(), std::io::Error> {
+    Ok(tokio::signal::ctrl_c().await?)
 }
 
 async fn handle(args: Arc<Args>, req: Request<Body>) -> Result<Response<Body>, HttpError> {
