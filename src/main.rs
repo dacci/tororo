@@ -67,7 +67,10 @@ async fn handle(args: Arc<Args>, req: Request<Body>) -> Result<Response<Body>, H
     use tokio::fs::File;
     use tokio_util::codec::{BytesCodec, FramedRead};
 
-    let path = args.document_root.join(normalize(req.uri().path()));
+    let mut path = args.document_root.join(normalize(req.uri().path()));
+    if path.is_dir() {
+        path.push("index.html");
+    }
 
     let res = if req.method() != Method::GET {
         Err(StatusCode::METHOD_NOT_ALLOWED)
