@@ -2,8 +2,9 @@ use clap::Parser;
 use hyper::http::{Error as HttpError, Method, Request, Response, StatusCode};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Error, Server};
-use log::info;
+use log::{error, info};
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 
 #[derive(Debug, Parser)]
@@ -18,13 +19,23 @@ struct Args {
     document_root: PathBuf,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> ExitCode {
     use simplelog::{Config, SimpleLogger};
 
     SimpleLogger::init(log::LevelFilter::Info, Config::default())
         .expect("failed to initialize logging");
 
+    match main1() {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            error!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[tokio::main]
+async fn main1() -> Result<(), Box<dyn std::error::Error>> {
     let args = Arc::new(Args::parse());
 
     let service = make_service_fn(|_| {
